@@ -13,6 +13,24 @@ RUNTIME.mkdir(parents=True, exist_ok=True)
 PIDFILE = RUNTIME / 'sonora.pid'
 WAV = RUNTIME / 'dictation.wav'
 SETTINGS = ROOT / 'config' / 'settings.env'
+CONFIG_HOME = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config'))
+UI_FILE = CONFIG_HOME / 'sonora' / 'ui.json'
+
+
+def selected_ui():
+    try:
+        import json
+        value = json.loads(UI_FILE.read_text()).get('ui', 'normal')
+        return value if value in ('normal', 'qt') else 'normal'
+    except (OSError, ValueError, AttributeError):
+        return 'normal'
+
+
+def launch_selected_ui():
+    mode = '--qt' if selected_ui() == 'qt' else '--daemon'
+    command = [sys.executable, str(Path(__file__).resolve()), mode]
+    with open(os.devnull, 'wb') as sink:
+        subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=sink, stderr=sink, start_new_session=True, close_fds=True)
 
 
 def load_settings():
@@ -47,9 +65,7 @@ def toggle():
     if pid:
         os.kill(pid, signal.SIGUSR1)
         return 0
-    command = [sys.executable, str(Path(__file__).resolve()), '--daemon']
-    with open(os.devnull, 'wb') as sink:
-        subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=sink, stderr=sink, start_new_session=True, close_fds=True)
+    launch_selected_ui()
     return 0
 
 
@@ -359,9 +375,7 @@ def main():
             return toggle()
         if action == '--start':
             if not active_pid():
-                command = [sys.executable, str(Path(__file__).resolve()), '--daemon']
-                with open(os.devnull, 'wb') as sink:
-                    subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=sink, stderr=sink, start_new_session=True, close_fds=True)
+                launch_selected_ui()
             return 0
         if action == '--finish':
             pid = active_pid()
@@ -379,6 +393,9 @@ def main():
         daemon = action == '--daemon'
     else:
         daemon = False
+
+    if not daemon and selected_ui() == 'qt':
+        return run_qt_fallback()
 
     existing = active_pid()
     if existing:

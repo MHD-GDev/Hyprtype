@@ -34,7 +34,9 @@ Sonora does not press Enter after inserting the transcription. Recordings and te
 
 On the first launch inside Hyprland, Sonora automatically attempts to register **Right Alt** as its push-to-talk shortcut. If Right Alt is already in use, Sonora leaves the existing binding untouched and keeps its own shortcut disabled.
 
-Run sonora-setup to choose or change the shortcut:
+Run sonora-setup to choose the interface first, then configure the push-to-talk shortcut. Select the normal GTK orb or the Qt orb; the choice is saved and used by the `sonora` command and its push-to-talk binding. The separate `sonora-qt` command still launches Qt directly.
+
+Run sonora-setup to change the interface or shortcut:
 
 ```bash
 sonora-setup

@@ -9,6 +9,8 @@ CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
 SONORA_HOME = CONFIG_HOME / "sonora"
 HYPR_HOME = CONFIG_HOME / "hypr"
 STATE_FILE = SONORA_HOME / "hyprland" / "setup.json"
+UI_FILE = SONORA_HOME / "ui.json"
+UI_OPTIONS = {"normal": "Normal (GTK)", "qt": "Qt"}
 LUA_FILE = HYPR_HOME / "hyprland.lua"
 NATIVE_FILE = HYPR_HOME / "hyprland.conf"
 LUA_BEGIN, LUA_END = "-- >>> SONORA MANAGED PUSH-TO-TALK >>>", "-- <<< SONORA MANAGED PUSH-TO-TALK <<<"
@@ -191,6 +193,18 @@ def write_atomic(path, content):
     os.chmod(temp, path.stat().st_mode & 0o777 if path.exists() else 0o644)
     os.replace(temp, path)
 
+def selected_ui():
+    try:
+        value = json.loads(UI_FILE.read_text()).get("ui", "normal")
+        return value if value in UI_OPTIONS else "normal"
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return "normal"
+
+def save_ui(value):
+    if value not in UI_OPTIONS:
+        raise ValueError("Choose either normal or qt.")
+    write_atomic(UI_FILE, json.dumps({"ui": value}, indent=2) + "\n")
+
 def save_state(backend, config, shortcut, status, detail=""):
     data = {"version": 1, "backend": backend, "config": str(config),
             "shortcut": shortcut, "status": status, "detail": detail}
@@ -262,6 +276,7 @@ def status():
     print(f"Status: {data.get('status', 'unknown')}")
     print(f"Shortcut: {data.get('shortcut', 'none')}")
     print(f"Backend: {data.get('backend', 'unknown')}")
+    print(f"Interface: {UI_OPTIONS[selected_ui()]}")
     if data.get("detail"):
         print(f"Details: {data['detail']}")
     return 0 if data.get("status") == "enabled" else 1
@@ -290,8 +305,21 @@ def uninstall():
     return 0
 
 def interactive():
-    print("Sonora — Hyprland shortcut setup")
-    print("Enter a key such as ALT_R, SUPER + SPACE, or CTRL + ALT + D.")
+    print("Sonora setup")
+    print("Choose the interface to use when launching Sonora:")
+    current_ui = selected_ui()
+    print(f"  1. Normal (GTK){' [current]' if current_ui == 'normal' else ''}")
+    print(f"  2. Qt{' [current]' if current_ui == 'qt' else ''}")
+    choice = input(f"Interface [ {'1' if current_ui == 'normal' else '2'} ]: ").strip()
+    if choice:
+        choices = {"1": "normal", "normal": "normal", "gtk": "normal", "2": "qt", "qt": "qt"}
+        if choice.lower() not in choices:
+            print("Invalid interface selection. Setup cancelled.", file=sys.stderr)
+            return 2
+        current_ui = choices[choice.lower()]
+    save_ui(current_ui)
+    print(f"Interface selected: {UI_OPTIONS[current_ui]}")
+    print("Now choose a push-to-talk shortcut, such as ALT_R, SUPER + SPACE, or CTRL + ALT + D.")
     current = DEFAULT_SHORTCUT
     if STATE_FILE.exists():
         try:
@@ -328,6 +356,7 @@ def main():
             return apply(current)
         if args.auto:
             if STATE_FILE.exists(): return 0
+            if not UI_FILE.exists(): save_ui("normal")
             return apply(DEFAULT_SHORTCUT, auto=True)
         return interactive()
     except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
