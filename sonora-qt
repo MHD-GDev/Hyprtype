@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export QT_QPA_PLATFORM=wayland
+export QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+exec python3 "$ROOT/sonora-ui.py" --qt "$@"

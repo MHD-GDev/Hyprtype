@@ -1,0 +1,18 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Runtime logs and recordings
+/logs/*
+!/logs/.gitkeep
+
+# Temporary files
+*.sonora-tmp
+
+# Local snapshots
+/watch_*
+
+# Whisper.cpp is vendored source; keep generated builds and model weights local
+/vendor/whisper.cpp/.git/
+/vendor/whisper.cpp/build/
+/vendor/whisper.cpp/models/*.bin
