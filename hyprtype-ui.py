@@ -80,6 +80,7 @@ def load_settings():
 
 CFG = load_settings()
 from integration.dependencies import MODEL, WHISPER, ensure_dependencies, library_environment
+from integration.microphone import normalize_recording
 
 
 def active_pid():
@@ -291,6 +292,7 @@ QQW.Window {
                 time.sleep(0.7)
                 close_app(True)
                 return
+            normalize_recording(WAV)
             env = library_environment()
             result = subprocess.run([
                 "nice", "-n", "5", str(WHISPER), "-m", str(MODEL), "-f", str(WAV),
@@ -645,6 +647,7 @@ def main():
                 GLib.idle_add(update_status, 'NO AUDIO')
                 GLib.timeout_add(700, lambda: (close_app(True), False)[1])
                 return
+            normalize_recording(WAV)
             whisper_env = library_environment()
             result = subprocess.run([
                 'nice', '-n', '5', str(WHISPER), '-m', str(MODEL), '-f', str(WAV),

@@ -75,7 +75,7 @@ Make sure `~/.local/bin` is in your `PATH`.
 hyprtype-setup
 ```
 
-The wizard asks you to choose the interface first (**Normal (GTK)** or **Qt**), then configure your push-to-talk shortcut. Right Alt is the default.
+The wizard asks you to choose the interface first (**Normal (GTK)** or **Qt**), then configure your push-to-talk shortcut. Right Alt is the default. After setup, run `hyprtype-setup --calibrate-mic` to measure background noise and your speaking level for the current default microphone. Calibration is saved per PipeWire microphone; Hyprtype also applies conservative per-recording level normalization without changing system-wide microphone volume.
 
 During setup, Hyprtype initializes the Whisper.cpp submodule if needed, builds the speech recognition engine, downloads the English `base.en` model, and verifies its SHA-1 checksum. This initial setup requires an internet connection and may take a few minutes. If required build tools are missing, the setup process offers to install them through `pacman`.
 
@@ -102,6 +102,7 @@ Use `hyprtype-setup` to open the interactive setup wizard.
 | --- | --- |
 | `hyprtype-setup --status` | Show the current integration status |
 | `hyprtype-setup --dependencies` | Install or repair Whisper.cpp and its model |
+| `hyprtype-setup --calibrate-mic` | Calibrate the current default microphone |
 | `hyprtype-setup --set "SUPER + SPACE"` | Set the push-to-talk shortcut |
 | `hyprtype-setup --repair` | Reapply the saved shortcut |
 | `hyprtype-setup --remove` | Remove Hyprtype's managed Hyprland integration |
@@ -128,6 +129,8 @@ RECORD_CHANNELS=1
 | `RECORD_RATE` | Recording sample rate |
 | `RECORD_CHANNELS` | Number of recording channels |
 
+Microphone selection follows the current PipeWire default input automatically. Microphone calibration profiles are stored in `~/.config/hyprtype/microphones.json` (or `$XDG_CONFIG_HOME/hyprtype/microphones.json`) and are matched by the PipeWire node name. Re-run calibration after changing microphones or moving to a substantially different recording environment. Hyprtype never changes the system-wide input volume.
+
 ## Runtime files
 
 Hyprtype keeps its speech-recognition engine and model under `$XDG_DATA_HOME/hyprtype/` (default: `~/.local/share/hyprtype/`).
@@ -138,6 +141,7 @@ Temporary recordings and runtime state are stored in `$XDG_RUNTIME_DIR/hyprtype-
 
 - **No transcription:** Run `hyprtype-setup --dependencies` to verify or repair the local Whisper.cpp engine and model.
 - **Recording does not start:** Check that PipeWire and WirePlumber are running and that your microphone is available.
+- **Speech is too quiet or noisy:** Check the default input in your audio settings, then run `hyprtype-setup --calibrate-mic` in a terminal and follow the prompts.
 - **Text is not inserted:** Verify that `wtype` is installed and that the target application accepts Wayland virtual-keyboard input.
 - **Shortcut does not work:** Run `hyprtype-setup --status`. If the shortcut is occupied, choose another one with the setup wizard or `--set`.
 - **Qt interface does not launch:** Install the optional Qt dependencies. The GTK interface does not require them.

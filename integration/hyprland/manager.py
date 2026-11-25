@@ -5,6 +5,7 @@ import argparse, json, os, re, shlex, shutil, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dependencies import ensure_dependencies
+from microphone import calibrate as calibrate_microphone
 
 HOME = Path.home()
 CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
@@ -347,10 +348,12 @@ def main():
     group.add_argument("--set", metavar="SHORTCUT", help="Set a shortcut, e.g. 'SUPER + SPACE'.")
     group.add_argument("--repair", action="store_true", help="Reapply the currently selected shortcut.")
     group.add_argument("--dependencies", action="store_true", help="Install or repair Whisper.cpp and its model.")
+    group.add_argument("--calibrate-mic", action="store_true", help="Calibrate the current default microphone.")
     args = parser.parse_args()
     try:
         if args.status: return status()
         if args.remove: return uninstall()
+        if args.calibrate_mic: return calibrate_microphone()
         ensure_dependencies(interactive=sys.stdin.isatty())
         if args.dependencies: return 0
         if args.set: return apply(args.set)
