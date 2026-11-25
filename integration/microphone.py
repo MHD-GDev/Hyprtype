@@ -65,7 +65,8 @@ def save_profile(identity: str, profile: dict) -> None:
         temp.unlink(missing_ok=True)
 
 
-def read_pcm_stats(path: Path) -> tuple[float, float, int]:
+def clipping_ratio(path: Path, threshold: int = 32760) -> float:
+    """Return the fraction of PCM samples at or very near digital full scale."""
     with wave.open(str(path), "rb") as wav:
         if wav.getsampwidth() != 2 or wav.getnchannels() != 1:
             raise RuntimeError("Calibration recording has an unexpected audio format.")
@@ -76,9 +77,8 @@ def read_pcm_stats(path: Path) -> tuple[float, float, int]:
         samples.byteswap()
     if not samples:
         raise RuntimeError("The microphone recording was empty.")
-    peak = max(abs(sample) for sample in samples) / 32768.0
-    rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768.0
-    return rms, peak, len(samples)
+    clipped = sum(1 for sample in samples if abs(sample) >= threshold)
+    return clipped / len(samples)
 
 
 def frame_rms_levels(path: Path, frame_ms: int = 20) -> list[float]:
@@ -150,6 +150,7 @@ def calibrate(rate: int = 16000, channels: int = 1) -> int:
         quiet_path = Path(directory) / "quiet.wav"
         voice_path = Path(directory) / "voice.wav"
         capture(quiet_path, 3.0, rate, channels)
+        quiet_clipping = clipping_ratio(quiet_path)
         noise_levels = frame_rms_levels(quiet_path)
         # Use a high percentile of the silence sample to account for intermittent
         # laptop fan/keyboard noise without letting one transient dominate.
@@ -159,11 +160,26 @@ def calibrate(rate: int = 16000, channels: int = 1) -> int:
         input("Press Enter when ready...")
         capture(voice_path, 5.0, rate, channels)
         voice_levels = frame_rms_levels(voice_path)
-        _, voice_peak, _ = read_pcm_stats(voice_path)
+        voice_clipping = clipping_ratio(voice_path)
         # Speech often contains pauses. Estimate speaking level from the
         # louder quarter of short frames instead of averaging all five seconds.
         louder_frames = sorted(voice_levels)[max(0, int(len(voice_levels) * 0.75)):]
         voice_rms = percentile(louder_frames, 0.50)
+
+    # A small number of full-scale samples can be natural transients. A
+    # sustained ratio indicates the ADC/input path is saturating; software
+    # normalization cannot recover the waveform once it has clipped.
+    clipping_limit = 0.001
+    if quiet_clipping >= clipping_limit or voice_clipping >= clipping_limit:
+        quiet_pct = quiet_clipping * 100
+        voice_pct = voice_clipping * 100
+        raise RuntimeError(
+            "Microphone input appears to be clipping (digital saturation). "
+            f"Near-full-scale samples: silence {quiet_pct:.2f}%, speech {voice_pct:.2f}%. "
+            "Lower the microphone's hardware/input gain in your system audio settings "
+            "or mixer (for example, alsamixer), then run calibration again. "
+            "Hyprtype has not changed your system volume or saved a calibration profile."
+        )
 
     separation = voice_rms / max(noise_rms, 1e-7)
     if voice_rms < max(noise_rms * 1.8, 0.0005):
@@ -175,8 +191,6 @@ def calibrate(rate: int = 16000, channels: int = 1) -> int:
             f"(ratio {separation:.1f}x). Check the selected/default microphone, "
             "move closer, reduce background noise, and try again."
         )
-    if voice_peak > 0.995:
-        print("Warning: the test recording clipped. Reduce microphone input volume and calibrate again.")
     max_safe_gain = min(MAX_GAIN, TARGET_RMS / max(noise_rms * 3.0, 0.001))
     profile = {
         "version": 1,

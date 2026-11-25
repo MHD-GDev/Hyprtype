@@ -142,6 +142,7 @@ Temporary recordings and runtime state are stored in `$XDG_RUNTIME_DIR/hyprtype-
 - **No transcription:** Run `hyprtype-setup --dependencies` to verify or repair the local Whisper.cpp engine and model.
 - **Recording does not start:** Check that PipeWire and WirePlumber are running and that your microphone is available.
 - **Speech is too quiet or noisy:** Check the default input in your audio settings, then run `hyprtype-setup --calibrate-mic` in a terminal and follow the prompts.
+- **Calibration reports microphone clipping/saturation:** Lower the microphone's hardware input gain in your desktop audio settings or mixer (for example, `alsamixer`), then run calibration again. Hyprtype does not change system mixer settings, and software normalization cannot repair audio that was clipped during capture.
 - **Text is not inserted:** Verify that `wtype` is installed and that the target application accepts Wayland virtual-keyboard input.
 - **Shortcut does not work:** Run `hyprtype-setup --status`. If the shortcut is occupied, choose another one with the setup wizard or `--set`.
 - **Qt interface does not launch:** Install the optional Qt dependencies. The GTK interface does not require them.
