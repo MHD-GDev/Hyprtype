@@ -81,6 +81,34 @@ def read_pcm_stats(path: Path) -> tuple[float, float, int]:
     return rms, peak, len(samples)
 
 
+def frame_rms_levels(path: Path, frame_ms: int = 20) -> list[float]:
+    """Return short-window RMS levels so pauses do not hide otherwise clear speech."""
+    with wave.open(str(path), "rb") as wav:
+        if wav.getsampwidth() != 2 or wav.getnchannels() != 1:
+            raise RuntimeError("Calibration recording has an unexpected audio format.")
+        rate = wav.getframerate()
+        frames = wav.readframes(wav.getnframes())
+    samples = array("h")
+    samples.frombytes(frames)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    frame_size = max(1, rate * frame_ms // 1000)
+    levels = []
+    for start in range(0, len(samples) - frame_size + 1, frame_size):
+        chunk = samples[start:start + frame_size]
+        rms = math.sqrt(sum(sample * sample for sample in chunk) / frame_size) / 32768.0
+        levels.append(rms)
+    if not levels:
+        raise RuntimeError("The microphone recording was too short or empty.")
+    return levels
+
+
+def percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, math.ceil(fraction * len(ordered)) - 1))
+    return ordered[index]
+
+
 def capture(path: Path, seconds: float, rate: int, channels: int) -> None:
     command = [
         "pw-record", "--rate", str(rate), "--channels", str(channels),
@@ -122,15 +150,31 @@ def calibrate(rate: int = 16000, channels: int = 1) -> int:
         quiet_path = Path(directory) / "quiet.wav"
         voice_path = Path(directory) / "voice.wav"
         capture(quiet_path, 3.0, rate, channels)
-        noise_rms, _, _ = read_pcm_stats(quiet_path)
+        noise_levels = frame_rms_levels(quiet_path)
+        # Use a high percentile of the silence sample to account for intermittent
+        # laptop fan/keyboard noise without letting one transient dominate.
+        noise_rms = percentile(noise_levels, 0.90)
         print(f"Background noise measured: {20 * math.log10(max(noise_rms, 1e-7)):.1f} dBFS")
         print("\nStep 2 of 2: Speak naturally for 5 seconds at your usual distance.")
         input("Press Enter when ready...")
         capture(voice_path, 5.0, rate, channels)
-        voice_rms, voice_peak, _ = read_pcm_stats(voice_path)
+        voice_levels = frame_rms_levels(voice_path)
+        _, voice_peak, _ = read_pcm_stats(voice_path)
+        # Speech often contains pauses. Estimate speaking level from the
+        # louder quarter of short frames instead of averaging all five seconds.
+        louder_frames = sorted(voice_levels)[max(0, int(len(voice_levels) * 0.75)):]
+        voice_rms = percentile(louder_frames, 0.50)
 
-    if voice_rms < max(noise_rms * 1.5, 0.0008):
-        raise RuntimeError("Your voice was not clearly above the background noise. Check the selected microphone and try again.")
+    separation = voice_rms / max(noise_rms, 1e-7)
+    if voice_rms < max(noise_rms * 1.8, 0.0005):
+        noise_db = 20 * math.log10(max(noise_rms, 1e-7))
+        voice_db = 20 * math.log10(max(voice_rms, 1e-7))
+        raise RuntimeError(
+            "Could not clearly separate speech from background noise. "
+            f"Measured silence: {noise_db:.1f} dBFS; speech: {voice_db:.1f} dBFS "
+            f"(ratio {separation:.1f}x). Check the selected/default microphone, "
+            "move closer, reduce background noise, and try again."
+        )
     if voice_peak > 0.995:
         print("Warning: the test recording clipped. Reduce microphone input volume and calibrate again.")
     max_safe_gain = min(MAX_GAIN, TARGET_RMS / max(noise_rms * 3.0, 0.001))
