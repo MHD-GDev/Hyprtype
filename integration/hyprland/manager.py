@@ -1,40 +1,42 @@
 #!/usr/bin/env python3
-"""Manage Sonora's Hyprland push-to-talk integration safely."""
+"""Manage Hyprtype's Hyprland push-to-talk integration safely."""
 from __future__ import annotations
 import argparse, json, os, re, shlex, shutil, subprocess, sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from dependencies import ensure_dependencies
 
 HOME = Path.home()
 CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
-SONORA_HOME = CONFIG_HOME / "sonora"
+HYPRTYPE_HOME = CONFIG_HOME / "hyprtype"
 HYPR_HOME = CONFIG_HOME / "hypr"
-STATE_FILE = SONORA_HOME / "hyprland" / "setup.json"
-UI_FILE = SONORA_HOME / "ui.json"
+STATE_FILE = HYPRTYPE_HOME / "hyprland" / "setup.json"
+UI_FILE = HYPRTYPE_HOME / "ui.json"
 UI_OPTIONS = {"normal": "Normal (GTK)", "qt": "Qt"}
 LUA_FILE = HYPR_HOME / "hyprland.lua"
 NATIVE_FILE = HYPR_HOME / "hyprland.conf"
-LUA_BEGIN, LUA_END = "-- >>> SONORA MANAGED PUSH-TO-TALK >>>", "-- <<< SONORA MANAGED PUSH-TO-TALK <<<"
-CONF_BEGIN, CONF_END = "# >>> SONORA MANAGED PUSH-TO-TALK >>>", "# <<< SONORA MANAGED PUSH-TO-TALK <<<"
+LUA_BEGIN, LUA_END = "-- >>> HYPRTYPE MANAGED PUSH-TO-TALK >>>", "-- <<< HYPRTYPE MANAGED PUSH-TO-TALK <<<"
+CONF_BEGIN, CONF_END = "# >>> HYPRTYPE MANAGED PUSH-TO-TALK >>>", "# <<< HYPRTYPE MANAGED PUSH-TO-TALK <<<"
 DEFAULT_SHORTCUT = "ALT_R"
 MODIFIERS = {"SUPER", "SHIFT", "CTRL", "ALT", "MOD2", "MOD3", "MOD5"}
 
 def notify(message, urgency="normal"):
     if shutil.which("notify-send"):
-        subprocess.run(["notify-send", "-a", "Sonora", "-u", urgency, "Sonora", message],
+        subprocess.run(["notify-send", "-a", "Hyprtype", "-u", urgency, "Hyprtype", message],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def find_sonora():
-    found = shutil.which("sonora")
+def find_hyprtype():
+    found = shutil.which("hyprtype")
     if found:
         return str(Path(found).resolve())
-    candidate = Path(__file__).resolve().parents[2] / "sonora"
+    candidate = Path(__file__).resolve().parents[2] / "hyprtype"
     if candidate.exists():
         return str(candidate)
-    raise RuntimeError("Cannot find the sonora command. Install Sonora or add it to PATH.")
+    raise RuntimeError("Cannot find the hyprtype command. Install Hyprtype or add it to PATH.")
 
 def detect_backend():
     if not shutil.which("hyprctl"):
-        raise RuntimeError("hyprctl is unavailable; Sonora's shortcut setup requires Hyprland.")
+        raise RuntimeError("hyprctl is unavailable; Hyprtype's shortcut setup requires Hyprland.")
     probe = subprocess.run(["hyprctl", "instances"], capture_output=True, text=True)
     if probe.returncode or not probe.stdout.strip():
         raise RuntimeError("Hyprland is not running.")
@@ -76,23 +78,23 @@ def read_binds():
         raise RuntimeError("Hyprland returned an unexpected binding list; refusing to change shortcuts.")
     return data
 
-def legacy_sonora_pair(text, key):
+def legacy_hyprtype_pair(text, key):
     if key != "ALT_R":
         return False
     # Only recognize the original, unmarked pair. Never infer ownership from
-    # a command string elsewhere in a generated Sonora block.
+    # a command string elsewhere in a generated Hyprtype block.
     unmanaged = re.sub(r"(?ms)^" + re.escape(LUA_BEGIN) + r".*?^" + re.escape(LUA_END) + r"\s*", "", text)
-    start = any('hl.bind("ALT_R"' in line and "sonora --start" in line for line in unmanaged.splitlines())
-    finish = any('hl.bind("ALT_R"' in line and "sonora --finish" in line for line in unmanaged.splitlines())
+    start = any('hl.bind("ALT_R"' in line and "hyprtype --start" in line for line in unmanaged.splitlines())
+    finish = any('hl.bind("ALT_R"' in line and "hyprtype --finish" in line for line in unmanaged.splitlines())
     return start and finish
 
-def managed_sonora_pair(shortcut, backend, config_text):
+def managed_hyprtype_pair(shortcut, backend, config_text):
     mods, key = parse_shortcut(shortcut)
     if backend == "lua":
         source = config_text
         begin, end = LUA_BEGIN, LUA_END
     else:
-        bindings = SONORA_HOME / "hyprland" / "bindings.conf"
+        bindings = HYPRTYPE_HOME / "hyprland" / "bindings.conf"
         source = bindings.read_text() if bindings.is_file() else ""
         begin, end = CONF_BEGIN, CONF_END
     match = re.search(r"(?ms)^" + re.escape(begin) + r"(.*?)^" + re.escape(end), source)
@@ -112,8 +114,8 @@ def find_conflicts(shortcut, config_text, backend):
     mods, key = parse_shortcut(shortcut)
     shortcut = " + ".join(mods + [key]) if mods else key
     legacy = (
-        legacy_sonora_pair(config_text, key)
-        or managed_sonora_pair(shortcut, backend, config_text)
+        legacy_hyprtype_pair(config_text, key)
+        or managed_hyprtype_pair(shortcut, backend, config_text)
     )
     if STATE_FILE.exists():
         try:
@@ -122,7 +124,7 @@ def find_conflicts(shortcut, config_text, backend):
                 saved.get("status") == "enabled"
                 and saved.get("shortcut") == shortcut
             )
-            legacy = legacy or (current_owned and managed_sonora_pair(shortcut, backend, config_text))
+            legacy = legacy or (current_owned and managed_hyprtype_pair(shortcut, backend, config_text))
         except (OSError, json.JSONDecodeError):
             pass
     legacy_release_slots = {False, True} if legacy else set()
@@ -132,7 +134,7 @@ def find_conflicts(shortcut, config_text, backend):
             continue
         if legacy and bind.get("release", False) in legacy_release_slots:
             # Migrate exactly one press and one release binding from the known
-            # legacy Sonora pair. Any additional binding remains a conflict.
+            # legacy Hyprtype pair. Any additional binding remains a conflict.
             legacy_release_slots.remove(bind.get("release", False))
             continue
         conflicts.append(bind)
@@ -146,7 +148,7 @@ def managed_block(shortcut, executable, backend):
         key_expr = json.dumps(" + ".join(mods + [key]) if mods else key)
         return "\n".join([
             LUA_BEGIN,
-            "-- Generated by sonora-setup. Change it through sonora-setup.",
+            "-- Generated by hyprtype-setup. Change it through hyprtype-setup.",
             f"hl.bind({key_expr}, hl.dsp.exec_cmd({json.dumps(start)}))",
             f"hl.bind({key_expr}, hl.dsp.exec_cmd({json.dumps(finish)}), {{ release = true }})",
             LUA_END,
@@ -154,7 +156,7 @@ def managed_block(shortcut, executable, backend):
     mod_expr = " ".join(mods)
     return "\n".join([
         CONF_BEGIN,
-        "# Generated by sonora-setup. Change it through sonora-setup.",
+        "# Generated by hyprtype-setup. Change it through hyprtype-setup.",
         f"bind = {mod_expr}, {key}, exec, {start}",
         f"bindr = {mod_expr}, {key}, exec, {finish}",
         CONF_END,
@@ -166,29 +168,29 @@ def replace_managed_block(text, block, backend):
     if backend == "lua":
         text = "\n".join(
             line for line in text.splitlines()
-            if not ('hl.bind("ALT_R"' in line and ("sonora --start" in line or "sonora --finish" in line))
+            if not ('hl.bind("ALT_R"' in line and ("hyprtype --start" in line or "hyprtype --finish" in line))
         ).rstrip() + "\n"
     return text.rstrip() + ("\n\n" + block + "\n" if block else "\n")
 
 def ensure_native_source(config):
-    bindings = SONORA_HOME / "hyprland" / "bindings.conf"
+    bindings = HYPRTYPE_HOME / "hyprland" / "bindings.conf"
     source = f"source = {bindings}"
     text = config.read_text()
     if source in text:
         return text, False
-    return text.rstrip() + "\n\n# Sonora managed integration\n" + source + "\n", True
+    return text.rstrip() + "\n\n# Hyprtype managed integration\n" + source + "\n", True
 
 def backup_config(path):
     if not path.is_file():
         return None
-    backup = path.with_name(path.name + ".sonora-backup")
+    backup = path.with_name(path.name + ".hyprtype-backup")
     if not backup.exists():
         shutil.copy2(path, backup)
     return backup
 
 def write_atomic(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".sonora-tmp")
+    temp = path.with_name(path.name + ".hyprtype-tmp")
     temp.write_text(content)
     os.chmod(temp, path.stat().st_mode & 0o777 if path.exists() else 0o644)
     os.replace(temp, path)
@@ -217,28 +219,28 @@ def apply(shortcut, auto=False):
     old_text = config.read_text()
     conflicts = find_conflicts(shortcut, old_text, backend)
     if conflicts:
-        # If Sonora was previously active, remove only its managed binding so
-        # the selected conflicting key leaves Sonora disabled as requested.
+        # If Hyprtype was previously active, remove only its managed binding so
+        # the selected conflicting key leaves Hyprtype disabled as requested.
         if backend == "lua":
             disabled_text = replace_managed_block(old_text, "", backend)
             if disabled_text != old_text:
                 backup_config(config)
                 write_atomic(config, disabled_text)
         else:
-            bindings_file = SONORA_HOME / "hyprland" / "bindings.conf"
+            bindings_file = HYPRTYPE_HOME / "hyprland" / "bindings.conf"
             if bindings_file.exists():
                 write_atomic(bindings_file, "")
         subprocess.run(["hyprctl", "reload"], capture_output=True, text=True)
         detail = f"{len(conflicts)} existing Hyprland binding(s) use {shortcut}."
         save_state(backend, config, shortcut, "conflict", detail)
-        message = (f"{shortcut} is already in use. Sonora's shortcut is disabled; "
-                   "your existing binding was not changed. Run sonora-setup to choose another key.")
+        message = (f"{shortcut} is already in use. Hyprtype's shortcut is disabled; "
+                   "your existing binding was not changed. Run hyprtype-setup to choose another key.")
         print(message)
         notify(message, "warning")
         return 1
-    executable = find_sonora()
+    executable = find_hyprtype()
     block = managed_block(shortcut, executable, backend)
-    native_bindings = SONORA_HOME / "hyprland" / "bindings.conf"
+    native_bindings = HYPRTYPE_HOME / "hyprland" / "bindings.conf"
     previous_bindings = native_bindings.read_text() if backend == "native" and native_bindings.exists() else None
     if backend == "lua":
         updated = replace_managed_block(old_text, block, backend)
@@ -251,7 +253,7 @@ def apply(shortcut, auto=False):
         if changed:
             backup_config(config)
             write_atomic(config, include_text)
-        write_atomic(SONORA_HOME / "hyprland" / "bindings.conf", block + "\n")
+        write_atomic(HYPRTYPE_HOME / "hyprland" / "bindings.conf", block + "\n")
     result = subprocess.run(["hyprctl", "reload"], capture_output=True, text=True)
     if result.returncode:
         write_atomic(config, old_text)
@@ -270,7 +272,7 @@ def apply(shortcut, auto=False):
 
 def status():
     if not STATE_FILE.exists():
-        print("Sonora Hyprland integration is not configured.")
+        print("Hyprtype Hyprland integration is not configured.")
         return 1
     data = json.loads(STATE_FILE.read_text())
     print(f"Status: {data.get('status', 'unknown')}")
@@ -283,7 +285,7 @@ def status():
 
 def uninstall():
     if not STATE_FILE.exists():
-        print("No Sonora integration state was found.")
+        print("No Hyprtype integration state was found.")
         return 0
     data = json.loads(STATE_FILE.read_text())
     backend, config = data.get("backend"), Path(data.get("config", ""))
@@ -291,22 +293,22 @@ def uninstall():
         old = config.read_text()
         updated = replace_managed_block(old, "", backend)
         if backend == "native":
-            source = f"source = {SONORA_HOME / 'hyprland' / 'bindings.conf'}"
-            updated = re.sub(r"(?m)^# Sonora managed integration\n" + re.escape(source) + r"\n?", "", updated)
+            source = f"source = {HYPRTYPE_HOME / 'hyprland' / 'bindings.conf'}"
+            updated = re.sub(r"(?m)^# Hyprtype managed integration\n" + re.escape(source) + r"\n?", "", updated)
         if updated != old:
             backup_config(config)
             write_atomic(config, updated)
-    (SONORA_HOME / "hyprland" / "bindings.conf").unlink(missing_ok=True)
+    (HYPRTYPE_HOME / "hyprland" / "bindings.conf").unlink(missing_ok=True)
     STATE_FILE.unlink(missing_ok=True)
     if shutil.which("hyprctl"):
         subprocess.run(["hyprctl", "reload"], capture_output=True)
-    print("Sonora's managed Hyprland integration has been removed.")
-    notify("Sonora's Hyprland shortcut integration was removed.")
+    print("Hyprtype's managed Hyprland integration has been removed.")
+    notify("Hyprtype's Hyprland shortcut integration was removed.")
     return 0
 
 def interactive():
-    print("Sonora setup")
-    print("Choose the interface to use when launching Sonora:")
+    print("Hyprtype setup")
+    print("Choose the interface to use when launching Hyprtype:")
     current_ui = selected_ui()
     print(f"  1. Normal (GTK){' [current]' if current_ui == 'normal' else ''}")
     print(f"  2. Qt{' [current]' if current_ui == 'qt' else ''}")
@@ -337,17 +339,20 @@ def interactive():
         return 1
 
 def main():
-    parser = argparse.ArgumentParser(prog="sonora-setup", description="Configure Sonora push-to-talk for Hyprland.")
+    parser = argparse.ArgumentParser(prog="hyprtype-setup", description="Configure Hyprtype push-to-talk for Hyprland.")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--auto", action="store_true", help="First-launch setup using Right Alt if available.")
     group.add_argument("--status", action="store_true", help="Show integration status.")
-    group.add_argument("--remove", action="store_true", help="Remove Sonora's managed integration.")
+    group.add_argument("--remove", action="store_true", help="Remove Hyprtype's managed integration.")
     group.add_argument("--set", metavar="SHORTCUT", help="Set a shortcut, e.g. 'SUPER + SPACE'.")
     group.add_argument("--repair", action="store_true", help="Reapply the currently selected shortcut.")
+    group.add_argument("--dependencies", action="store_true", help="Install or repair Whisper.cpp and its model.")
     args = parser.parse_args()
     try:
         if args.status: return status()
         if args.remove: return uninstall()
+        ensure_dependencies(interactive=sys.stdin.isatty())
+        if args.dependencies: return 0
         if args.set: return apply(args.set)
         if args.repair:
             current = DEFAULT_SHORTCUT
@@ -360,7 +365,7 @@ def main():
             return apply(DEFAULT_SHORTCUT, auto=True)
         return interactive()
     except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
-        print(f"sonora-setup: {exc}", file=sys.stderr)
+        print(f"hyprtype-setup: {exc}", file=sys.stderr)
         notify(str(exc), "critical")
         return 1
 

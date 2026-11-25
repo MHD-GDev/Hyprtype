@@ -1,58 +1,154 @@
-# Sonora
+# Hyprtype
 
-**Local voice dictation for Linux.** Speak, transcribe with Whisper.cpp, and type the result directly into the focused application.
+**Minimal, local voice dictation for Hyprland.**
+
+Hyprtype turns speech into text and types the transcription directly into the focused application. It uses [Whisper.cpp](https://github.com/ggml-org/whisper.cpp) for on-device speech recognition and provides a compact recording orb for Wayland.
+
+- **Local transcription** — audio is processed on your machine.
+- **Push-to-talk** — hold a configurable shortcut to record; release it to transcribe.
+- **Direct text input** — transcription is typed into the focused application.
+- **Two interfaces** — choose the lightweight GTK interface or the optional Qt interface.
+- **Hyprland integration** — configure and manage shortcuts from the command line.
 
 ## Requirements
 
-- Hyprland on Wayland
-- PipeWire (pw-record)
-- WirePlumber (wpctl)
-- libnotify (notify-send)
-- wtype for Wayland text input
-- GTK 3 and GTK Layer Shell (primary recording orb UI)
-- PySide6 / Qt 6 (optional alternative UI, launched with sonora-qt)
-- Whisper.cpp at vendor/whisper.cpp/build/bin/whisper-cli
-- English Whisper model at vendor/whisper.cpp/models/ggml-base.en.bin
+Hyprtype currently targets **Arch Linux, Wayland, and Hyprland**.
 
-On Arch Linux, install the optional Qt interface with sudo pacman -S pyside6. From the project directory, add the main commands to your PATH:
+Required: Python 3, PipeWire, WirePlumber, GTK 3, GTK Layer Shell, wtype, libnotify, Git, CMake, a C/C++ toolchain, and curl. Hyprtype automatically builds Whisper.cpp and downloads its default model during setup.
+
+The optional Qt interface additionally requires PySide6, Qt 6, and Layer Shell support for Qt.
+
+## Installation
+
+### 1. Install dependencies
+
+On Arch Linux:
+
+```bash
+sudo pacman -S --needed git base-devel cmake curl python gtk3 gtk-layer-shell \
+  python-gobject pipewire wireplumber libnotify wtype
+```
+
+For the optional Qt interface:
+
+```bash
+sudo pacman -S --needed pyside6 layer-shell-qt
+```
+
+### 2. Clone the repository
+
+Clone with the Whisper.cpp submodule:
+
+```bash
+git clone --recurse-submodules https://github.com/MHD-GDev/Hyprtype.git
+cd Hyprtype
+```
+
+If you already cloned without submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+### 3. Add the commands to your PATH
+
+Run from the project directory:
 
 ```bash
 mkdir -p ~/.local/bin
-ln -sfn "$(realpath ./sonora)" ~/.local/bin/sonora
-ln -sfn "$(realpath ./sonora-setup)" ~/.local/bin/sonora-setup
+ln -sfn "$(realpath ./hyprtype)" ~/.local/bin/hyprtype
+ln -sfn "$(realpath ./hyprtype-setup)" ~/.local/bin/hyprtype-setup
 ```
 
-Launch the GTK interface with sonora; launch the separate Qt interface with ./sonora-qt from the project directory.
+Ensure ~/.local/bin is in your PATH. Then run the setup wizard:
+
+```bash
+hyprtype-setup
+```
+
+Setup automatically initializes the Whisper.cpp submodule if needed, builds the speech recognition engine, downloads the English base.en model, and verifies its SHA-1 checksum. The first setup can take a few minutes and requires an internet connection. If build tools are missing, Hyprtype offers to install them through pacman.
+
+The engine and model are stored in ~/.local/share/hyprtype/, not in the project checkout. Existing valid Whisper builds and models from older checkouts are migrated automatically.
+
+You can also install or repair only the speech dependencies with:
+
+```bash
+hyprtype-setup --dependencies
+```
+
+Then launch:
+
+```bash
+hyprtype
+```
+
+## First-time setup
+
+On first launch, Hyprtype attempts to register **Right Alt** as the push-to-talk shortcut. If that key is already occupied, Hyprtype leaves the existing binding untouched and disables its own shortcut.
+
+Run the interactive setup to select the interface and shortcut:
+
+```bash
+hyprtype-setup
+```
+
+The wizard asks you to choose the interface first (**Normal (GTK)** or **Qt**), then asks for your push-to-talk key. Your choices are saved and used by the main hyprtype command.
 
 ## Usage
 
-Run sonora to open the recording orb. Hold the configured push-to-talk key while speaking; release it to transcribe and type the result into the focused application. Press Ctrl+C in a terminal-launched session to cancel.
+1. Focus the application or text field where you want the text.
+2. Hold your configured push-to-talk shortcut.
+3. Speak.
+4. Release the shortcut.
 
-Sonora does not press Enter after inserting the transcription. Recordings and temporary state are stored under $XDG_RUNTIME_DIR/sonora-dictation (or /tmp/sonora-dictation when XDG_RUNTIME_DIR is unset).
+## Shortcut management
 
-## Hyprland shortcut setup
+| Command | Action |
+| --- | --- |
+| hyprtype-setup | Open the interactive setup |
+| hyprtype-setup --status | Show integration status |
+| hyprtype-setup --dependencies | Install or repair Whisper.cpp and its model |
+| hyprtype-setup --set "SUPER + SPACE" | Set a shortcut |
+| hyprtype-setup --repair | Reapply the saved shortcut |
+| hyprtype-setup --remove | Remove Hyprtype's managed Hyprland integration |
 
-On the first launch inside Hyprland, Sonora automatically attempts to register **Right Alt** as its push-to-talk shortcut. If Right Alt is already in use, Sonora leaves the existing binding untouched and keeps its own shortcut disabled.
-
-Run sonora-setup to choose the interface first, then configure the push-to-talk shortcut. Select the normal GTK orb or the Qt orb; the choice is saved and used by the `sonora` command and its push-to-talk binding. The separate `sonora-qt` command still launches Qt directly.
-
-Run sonora-setup to change the interface or shortcut:
-
-```bash
-sonora-setup
-```
-
-You can also set a shortcut directly:
-
-```bash
-sonora-setup --set "SUPER + SPACE"
-sonora-setup --status
-sonora-setup --repair
-sonora-setup --remove
-```
-
-The setup tool supports Hyprland's Lua configuration (~/.config/hypr/hyprland.lua) and native configuration (~/.config/hypr/hyprland.conf). It backs up the original configuration as a .sonora-backup file, maintains a clearly marked Sonora-owned section, checks active bindings before registration, and never replaces another application's shortcut. If a selected key is occupied, Sonora disables its own binding and leaves the existing one untouched. Removing the integration deletes only Sonora's managed configuration.
+Hyprtype supports both ~/.config/hypr/hyprland.lua and ~/.config/hypr/hyprland.conf. It backs up the configuration before modifying it and only manages its own marked section. If a selected shortcut conflicts with an existing binding, Hyprtype does not replace that binding; its own shortcut is disabled instead.
 
 ## Configuration
 
-Edit config/settings.env to change the Whisper language, thread count, recording sample rate, or channel count.
+Edit config/settings.env:
+
+```ini
+WHISPER_THREADS=2
+WHISPER_LANGUAGE=en
+RECORD_RATE=16000
+RECORD_CHANNELS=1
+```
+
+| Setting | Description |
+| --- | --- |
+| WHISPER_THREADS | CPU threads used for transcription |
+| WHISPER_LANGUAGE | Language code passed to Whisper |
+| RECORD_RATE | Recording sample rate |
+| RECORD_CHANNELS | Number of recording channels |
+
+## Runtime files
+
+The Whisper.cpp executable and model are stored under $XDG_DATA_HOME/hyprtype/ (default: ~/.local/share/hyprtype/). Temporary recordings and runtime state are stored in $XDG_RUNTIME_DIR/hyprtype-dictation/; if XDG_RUNTIME_DIR is unset, Hyprtype uses a private per-user directory under /tmp. Runtime directories are checked for ownership and restrictive permissions before use.
+
+## Troubleshooting
+
+- **No transcription:** run hyprtype-setup --dependencies to verify or repair the local Whisper.cpp engine and model.
+- **Recording does not start:** check that PipeWire and WirePlumber are running and your microphone is available.
+- **Text is not inserted:** verify that wtype is installed and the target application accepts Wayland virtual-keyboard input.
+- **Shortcut does not work:** run hyprtype-setup --status; choose another key if the current one is occupied.
+- **Qt does not launch:** install the optional Qt dependencies. The GTK interface does not need them.
+
+## Acknowledgements
+
+- [Whisper.cpp](https://github.com/ggml-org/whisper.cpp) for local speech recognition.
+- [Hyprland](https://hypr.land/) for the Wayland compositor this project is built for.
+
+---
+
+Hyprtype is designed specifically for Hyprland. Other desktop environments and compositors are not currently supported.

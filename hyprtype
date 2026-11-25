@@ -2,4 +2,4 @@
 set -euo pipefail
 SOURCE="$(readlink -f -- "${BASH_SOURCE[0]}")"
 ROOT="$(cd -- "$(dirname -- "$SOURCE")" && pwd)"
-exec python3 "$ROOT/sonora-ui.py" "$@"
+exec python3 "$ROOT/hyprtype-ui.py" "$@"

@@ -1,20 +1,53 @@
 #!/usr/bin/env python3
-"""Sonora recording orb for Hyprland/Wayland."""
+"""Hyprtype recording orb for Hyprland/Wayland."""
 import os
 import signal
+import shutil
+import stat
 import subprocess
 import sys
 import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-RUNTIME = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'sonora-dictation'
-RUNTIME.mkdir(parents=True, exist_ok=True)
-PIDFILE = RUNTIME / 'sonora.pid'
+
+
+def secure_runtime_directory():
+    """Create a private runtime directory, refusing unsafe pre-existing paths."""
+    uid = os.getuid()
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_runtime:
+        base = Path(xdg_runtime)
+        try:
+            base_info = base.lstat()
+        except OSError as exc:
+            raise RuntimeError(f"Invalid XDG_RUNTIME_DIR: {exc}") from exc
+        if (not stat.S_ISDIR(base_info.st_mode) or base_info.st_uid != uid
+                or base_info.st_mode & 0o077):
+            raise RuntimeError("XDG_RUNTIME_DIR must be a private directory owned by the current user.")
+        runtime = base / "hyprtype-dictation"
+    else:
+        # A per-user name avoids sharing a predictable directory in /tmp.
+        runtime = Path("/tmp") / f"hyprtype-dictation-{uid}"
+
+    try:
+        runtime.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    info = runtime.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
+        raise RuntimeError(f"Refusing to use an unsafe runtime directory: {runtime}")
+    if info.st_mode & 0o077:
+        os.chmod(runtime, 0o700)
+    return runtime
+
+
+RUNTIME = secure_runtime_directory()
+PIDFILE = RUNTIME / 'hyprtype.pid'
 WAV = RUNTIME / 'dictation.wav'
 SETTINGS = ROOT / 'config' / 'settings.env'
 CONFIG_HOME = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config'))
-UI_FILE = CONFIG_HOME / 'sonora' / 'ui.json'
+UI_FILE = CONFIG_HOME / 'hyprtype' / 'ui.json'
 
 
 def selected_ui():
@@ -46,14 +79,20 @@ def load_settings():
 
 
 CFG = load_settings()
-WHISPER = ROOT / 'vendor' / 'whisper.cpp' / 'build' / 'bin' / 'whisper-cli'
-MODEL = ROOT / 'vendor' / 'whisper.cpp' / 'models' / 'ggml-base.en.bin'
+from integration.dependencies import MODEL, WHISPER, ensure_dependencies, library_environment
 
 
 def active_pid():
     try:
         pid = int(PIDFILE.read_text().strip())
         os.kill(pid, 0)
+        # A stale PID can be reused by an unrelated process. Only signal a
+        # process whose command line identifies this exact Hyprtype script.
+        command_line = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        expected_script = str(Path(__file__).resolve()).encode()
+        if expected_script not in command_line:
+            PIDFILE.unlink(missing_ok=True)
+            return None
         return pid
     except (OSError, ValueError):
         PIDFILE.unlink(missing_ok=True)
@@ -77,20 +116,20 @@ def run_qt_fallback():
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine
     except Exception as exc:
-        print(f"Sonora Qt UI dependencies unavailable: {exc}", file=sys.stderr)
+        print(f"Hyprtype Qt UI dependencies unavailable: {exc}", file=sys.stderr)
         return 1
 
     if not WHISPER.is_file() or not MODEL.is_file():
-        print("Sonora cannot find its Whisper.cpp executable or model.", file=sys.stderr)
+        print("Hyprtype cannot find its Whisper.cpp executable or model.", file=sys.stderr)
         return 1
     if os.environ.get("XDG_SESSION_TYPE") == "x11":
-        print("sonora-qt requires a Wayland session for layer-shell positioning.", file=sys.stderr)
+        print("hyprtype-qt requires a Wayland session for layer-shell positioning.", file=sys.stderr)
         return 1
 
     # The KDE integration turns the QML Window into a wlr-layer-shell surface.
     os.environ["QT_WAYLAND_SHELL_INTEGRATION"] = "layer-shell"
     app = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
-    app.setApplicationName("Sonora")
+    app.setApplicationName("Hyprtype")
 
     class Bridge(QObject):
         status = Signal(str)
@@ -139,7 +178,7 @@ QQW.Window {
     height: 108
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.Tool
-    title: "Sonora"
+    title: "Hyprtype"
     property int slideOffset: -116
     property bool closing: false
 
@@ -150,7 +189,7 @@ QQW.Window {
     LayerShell.Window.exclusionZone: -1
     LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
     LayerShell.Window.margins: ({ left: 0, top: 0, right: 0, bottom: 34 + slideOffset })
-    LayerShell.Window.scope: "sonora-qt"
+    LayerShell.Window.scope: "hyprtype-qt"
 
     Rectangle {
         id: orb
@@ -212,7 +251,7 @@ QQW.Window {
         stop.send_signal(signal.SIGINT)
         stop.wait(timeout=2)
         PIDFILE.unlink(missing_ok=True)
-        print("Sonora could not initialize the Qt Wayland layer surface.", file=sys.stderr)
+        print("Hyprtype could not initialize the Qt Wayland layer surface.", file=sys.stderr)
         return 1
     window = engine.rootObjects()[0]
 
@@ -252,9 +291,7 @@ QQW.Window {
                 time.sleep(0.7)
                 close_app(True)
                 return
-            env = os.environ.copy()
-            lib_dir = str(WHISPER.parent)
-            env["LD_LIBRARY_PATH"] = lib_dir + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+            env = library_environment()
             result = subprocess.run([
                 "nice", "-n", "5", str(WHISPER), "-m", str(MODEL), "-f", str(WAV),
                 "-l", CFG["WHISPER_LANGUAGE"], "-t", CFG["WHISPER_THREADS"],
@@ -262,10 +299,10 @@ QQW.Window {
             ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, env=env)
             if result.returncode != 0:
                 (ROOT / "logs").mkdir(exist_ok=True)
-                with (ROOT / "logs" / "sonora-errors.log").open("a") as log:
+                with (ROOT / "logs" / "hyprtype-errors.log").open("a") as log:
                     log.write("\n--- Whisper failed ---\n" + result.stderr + "\n")
                 bridge.status.emit("WHISPER ERROR")
-                subprocess.run(["notify-send", "Sonora", "Whisper failed. See logs/sonora-errors.log."],
+                subprocess.run(["notify-send", "Hyprtype", "Whisper failed. See logs/hyprtype-errors.log."],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
                 text = " ".join(result.stdout.split()).strip()
@@ -281,17 +318,15 @@ QQW.Window {
                                             stderr=subprocess.DEVNULL, check=False)
                     if typed.returncode == 0:
                         bridge.status.emit("COMPLETE")
-                        subprocess.run(["notify-send", "-t", "1400", "Sonora", "Transcription inserted"],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     else:
                         bridge.status.emit("INPUT ERROR")
                 else:
                     bridge.status.emit("NO SPEECH")
-                    subprocess.run(["notify-send", "Sonora", "No speech recognized"],
+                    subprocess.run(["notify-send", "Hyprtype", "No speech recognized"],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as exc:
             bridge.status.emit("ERROR")
-            print(f"Sonora Qt fallback error: {exc}", file=sys.stderr)
+            print(f"Hyprtype Qt fallback error: {exc}", file=sys.stderr)
         import time
         time.sleep(0.85)
         close_app(True)
@@ -300,7 +335,7 @@ QQW.Window {
         if state["cancel"] and not state["finished"]:
             state["finished"] = True
             bridge.status.emit("CANCELLED")
-            subprocess.run(["notify-send", "-t", "1200", "Sonora", "Recording cancelled"],
+            subprocess.run(["notify-send", "-t", "1200", "Hyprtype", "Recording cancelled"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             QTimer.singleShot(250, lambda: close_app(True))
             return
@@ -345,10 +380,10 @@ def ensure_first_launch_setup():
     if not os.environ.get('HYPRLAND_INSTANCE_SIGNATURE'):
         return
     config_home = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config'))
-    state_file = config_home / 'sonora' / 'hyprland' / 'setup.json'
+    state_file = config_home / 'hyprtype' / 'hyprland' / 'setup.json'
     if state_file.exists():
         return
-    setup_command = ROOT / 'sonora-setup'
+    setup_command = ROOT / 'hyprtype-setup'
     if not setup_command.is_file():
         return
     try:
@@ -364,8 +399,26 @@ def ensure_first_launch_setup():
         pass
 
 
+def prepare_dependencies():
+    try:
+        ensure_dependencies(interactive=sys.stdin.isatty())
+        return True
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        message = f'Hyprtype setup required: {exc}'
+        print(message, file=sys.stderr)
+        if shutil.which('notify-send'):
+            subprocess.run(['notify-send', '-a', 'Hyprtype', '-u', 'critical',
+                            'Hyprtype setup required', str(exc)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return False
+
+
 def main():
-    if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1] == '--qt'):
+    action = sys.argv[1] if len(sys.argv) > 1 else None
+    if action in (None, '--qt', '--daemon'):
+        if not prepare_dependencies():
+            return 1
+    if action in (None, '--qt'):
         ensure_first_launch_setup()
     if len(sys.argv) > 1:
         action = sys.argv[1]
@@ -388,7 +441,7 @@ def main():
                 os.kill(pid, signal.SIGINT)
             return 0
         if action not in ('--daemon',):
-            print('Usage: sonora [--start|--finish|--toggle|--cancel]', file=sys.stderr)
+            print('Usage: hyprtype [--start|--finish|--toggle|--cancel]', file=sys.stderr)
             return 2
         daemon = action == '--daemon'
     else:
@@ -399,7 +452,7 @@ def main():
 
     existing = active_pid()
     if existing:
-        print(f'Sonora is already running (PID {existing}). Use `sonora --toggle` to finish it.', file=sys.stderr)
+        print(f'Hyprtype is already running (PID {existing}). Use `hyprtype --toggle` to finish it.', file=sys.stderr)
         return 1
 
     try:
@@ -408,11 +461,11 @@ def main():
         gi.require_version('GtkLayerShell', '0.1')
         from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
     except Exception as exc:
-        print(f'Sonora GTK UI dependencies unavailable: {exc}', file=sys.stderr)
+        print(f'Hyprtype GTK UI dependencies unavailable: {exc}', file=sys.stderr)
         return 1
 
     if not WHISPER.is_file() or not MODEL.is_file():
-        print('Sonora cannot find its Whisper.cpp executable or model.', file=sys.stderr)
+        print('Hyprtype cannot find its Whisper.cpp executable or model.', file=sys.stderr)
         return 1
 
     # Remember the window that was focused when dictation began. The orb is
@@ -463,7 +516,7 @@ def main():
         pass
 
     window = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
-    window.set_title('Sonora')
+    window.set_title('Hyprtype')
     window.set_decorated(False)
     window.set_resizable(False)
     window.set_accept_focus(False)
@@ -496,7 +549,7 @@ def main():
     css = Gtk.CssProvider()
     css.load_from_data(b'''
         window { background: transparent; box-shadow: none; border: none; }
-        .sonora-orb {
+        .hyprtype-orb {
             min-width: 88px; min-height: 88px;
             background: #19191b;
             border: 1px solid #414145;
@@ -504,16 +557,16 @@ def main():
             box-shadow: none;
             padding: 0px;
         }
-        .sonora-status { color: #a5a5aa; font-family: 'Meslo LG M'; font-size: 10px; font-weight: 900; letter-spacing: 1.2px; }
+        .hyprtype-status { color: #a5a5aa; font-family: 'Meslo LG M'; font-size: 10px; font-weight: 900; letter-spacing: 1.2px; }
     ''')
     Gtk.StyleContext.add_provider_for_screen(screen, css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
     orb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
     orb.set_halign(Gtk.Align.CENTER)
     orb.set_valign(Gtk.Align.CENTER)
-    orb.get_style_context().add_class('sonora-orb')
+    orb.get_style_context().add_class('hyprtype-orb')
     status = Gtk.Label(label='LISTENING')
-    status.get_style_context().add_class('sonora-status')
+    status.get_style_context().add_class('hyprtype-status')
     status.set_halign(Gtk.Align.CENTER)
     status.set_valign(Gtk.Align.CENTER)
     orb.pack_start(status, True, True, 0)
@@ -592,11 +645,7 @@ def main():
                 GLib.idle_add(update_status, 'NO AUDIO')
                 GLib.timeout_add(700, lambda: (close_app(True), False)[1])
                 return
-            whisper_env = os.environ.copy()
-            whisper_lib_dir = str(WHISPER.parent)
-            whisper_env['LD_LIBRARY_PATH'] = whisper_lib_dir + (
-                ':' + whisper_env['LD_LIBRARY_PATH'] if whisper_env.get('LD_LIBRARY_PATH') else ''
-            )
+            whisper_env = library_environment()
             result = subprocess.run([
                 'nice', '-n', '5', str(WHISPER), '-m', str(MODEL), '-f', str(WAV),
                 '-l', CFG['WHISPER_LANGUAGE'], '-t', CFG['WHISPER_THREADS'],
@@ -604,10 +653,10 @@ def main():
             ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, env=whisper_env)
             if result.returncode != 0:
                 (ROOT / 'logs').mkdir(exist_ok=True)
-                with (ROOT / 'logs' / 'sonora-errors.log').open('a') as log:
+                with (ROOT / 'logs' / 'hyprtype-errors.log').open('a') as log:
                     log.write('\\n--- Whisper failed ---\\n' + result.stderr + '\\n')
                 GLib.idle_add(update_status, 'WHISPER ERROR')
-                subprocess.run(['notify-send', 'Sonora', 'Whisper failed. See logs/sonora-errors.log.'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(['notify-send', 'Hyprtype', 'Whisper failed. See logs/hyprtype-errors.log.'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 GLib.timeout_add(1200, lambda: (close_app(True), False)[1])
                 return
             text = ' '.join(result.stdout.split()).strip()
@@ -618,7 +667,7 @@ def main():
                 GLib.idle_add(stop_processing_animation)
                 GLib.idle_add(update_status, 'TYPING')
                 time.sleep(0.18)
-                # Return focus to the application that was active when Sonora
+                # Return focus to the application that was active when Hyprtype
                 # started, then inject text at that application's text cursor.
                 if focused_window:
                     subprocess.run(
@@ -630,12 +679,11 @@ def main():
                 typed = subprocess.run(['wtype', '--', text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 if typed.returncode == 0:
                     GLib.idle_add(update_status, 'COMPLETE')
-                    subprocess.run(['notify-send', '-t', '1400', 'Sonora', 'Transcription inserted'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
                     GLib.idle_add(update_status, 'INPUT ERROR')
             else:
                 GLib.idle_add(update_status, 'NO SPEECH')
-                subprocess.run(['notify-send', 'Sonora', 'No speech recognized'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(['notify-send', 'Hyprtype', 'No speech recognized'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             GLib.idle_add(update_status, 'ERROR')
         GLib.timeout_add(850, lambda: (close_app(True), False)[1])
@@ -645,7 +693,7 @@ def main():
         if cancel_requested and not finished:
             finished = True
             update_status('CANCELLED')
-            subprocess.run(['notify-send', '-t', '1200', 'Sonora', 'Recording cancelled'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['notify-send', '-t', '1200', 'Hyprtype', 'Recording cancelled'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             GLib.timeout_add(250, lambda: (close_app(True), False)[1])
             return False
         if finish_requested and not finished:

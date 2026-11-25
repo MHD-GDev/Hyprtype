@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SOURCE="$(readlink -f -- "$BASH_SOURCE")"
+ROOT="$(cd -- "$(dirname -- "$SOURCE")" && pwd)"
+export QT_QPA_PLATFORM=wayland
+export QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+exec python3 "$ROOT/hyprtype-ui.py" --qt "$@"
